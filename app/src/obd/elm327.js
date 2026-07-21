@@ -313,8 +313,14 @@ export class Elm327 {
   //          adapter no longer auto-generates it and multi-frame replies
   //          (which is most DTC lists) simply stall without it
 
-  /** Point the adapter at one module. Pass null to go back to broadcast. */
-  async targetModule(reqId) {
+  /**
+   * Point the adapter at one module. Pass null to go back to broadcast.
+   *
+   * `fast` skips flow-control setup: a discovery probe only ever expects a
+   * single-frame reply, so those three commands are pure latency. Across a
+   * 240-address sweep that is ~700 wasted BLE round trips.
+   */
+  async targetModule(reqId, { fast = false } = {}) {
     if (reqId === null) {
       await this.send('ATAR');       // restore automatic receive address
       await this.send('ATSH7DF');    // OBD-II functional broadcast
@@ -327,9 +333,11 @@ export class Elm327 {
 
     await this.send('ATSH' + req);
     await this.send('ATCRA' + res);
-    await this.send('ATFCSH' + req);
-    await this.send('ATFCSD300000');  // block size 0, no separation time
-    await this.send('ATFCSM1');       // use the flow control we just defined
+    if (!fast) {
+      await this.send('ATFCSH' + req);
+      await this.send('ATFCSD300000');  // block size 0, no separation time
+      await this.send('ATFCSM1');       // use the flow control we just defined
+    }
     this.target = reqId;
   }
 
@@ -358,12 +366,13 @@ export class Elm327 {
    * changes nothing, and even a *negative* reply proves something is home.
    */
   async probeModule(reqId, timeoutMs = 1200) {
-    await this.targetModule(reqId);
+    await this.targetModule(reqId, { fast: true });
     try {
       const { parsed } = await this.udsRequest(SERVICE.TESTER_PRESENT, [0x00], {
         timeoutMs, maxPending: 1,
       });
-      // Anything other than silence means a module answered.
+      // Anything other than silence means a module answered. A *negative*
+      // reply still proves presence — it refused, so it's listening.
       return parsed.kind === 'positive' || parsed.kind === 'negative';
     } catch {
       return false;
@@ -373,16 +382,29 @@ export class Elm327 {
   /**
    * Sweep candidate addresses and report which ones are actually populated.
    * This is the discovery step that replaces guessing at a module table.
+   *
+   * `signal` lets the UI abort a long sweep — a full-range scan is minutes,
+   * and being unable to stop it from the passenger seat is its own bug.
    */
-  async discoverModules(candidates = CANDIDATE_MODULES, onProgress) {
+  async discoverModules(candidates = CANDIDATE_MODULES, onProgress, signal) {
     const found = [];
-    for (let i = 0; i < candidates.length; i++) {
-      const c = candidates[i];
-      const present = await this.probeModule(c.req);
-      onProgress?.({ index: i, total: candidates.length, module: c, present });
-      if (present) found.push(c);
+    // Shorten the adapter's per-request patience: an empty address is decided
+    // by timeout, and the default wait dominates the sweep.
+    const restoreTimeout = async () => { await this.send('ATST64').catch(() => {}); };
+    await this.send('ATST20').catch(() => {});   // 0x20 * 4ms = ~128ms
+
+    try {
+      for (let i = 0; i < candidates.length; i++) {
+        if (signal?.aborted) break;
+        const c = candidates[i];
+        const present = await this.probeModule(c.req, 2000);
+        onProgress?.({ index: i, total: candidates.length, module: c, present });
+        if (present) found.push(c);
+      }
+    } finally {
+      await restoreTimeout();
+      await this.targetModule(null).catch(() => {});
     }
-    await this.targetModule(null);
     return found;
   }
 

@@ -16,7 +16,7 @@ import { decodeDtcBytes, describeDtc, isManufacturerSpecific } from './dtc.js';
 import { decodePid, decodeStatus } from './pids.js';
 import {
   parseUdsResponse, buildRequest, responseIdFor, decodeUdsDtc,
-  decodeDtcStatus, parseDtcsByStatusMask, WRITE_SERVICES,
+  decodeDtcStatus, parseDtcsByStatusMask, WRITE_SERVICES, fullSweepCandidates,
 } from './uds.js';
 
 let checks = 0;
@@ -387,6 +387,27 @@ check('duplicate DTC records are collapsed', () => {
     0x01, 0x33, 0x11, 0x08,
   ]);
   assert.equal(r.dtcs.length, 1);
+});
+
+check('full sweep covers the block but skips response-only addresses', () => {
+  const all = fullSweepCandidates();
+  const ids = all.map((c) => c.req);
+  assert.equal(Math.min(...ids), 0x700);
+  assert.equal(Math.max(...ids), 0x7ff);
+  // 7E8-7EF are where 7E0-7E7 reply; probing them is wasted time.
+  assert.equal(ids.filter((i) => i >= 0x7e8 && i <= 0x7ef).length, 0);
+  assert.equal(all.length, 256 - 8);
+});
+
+check('full sweep keeps the names we do know', () => {
+  const all = fullSweepCandidates();
+  const engine = all.find((c) => c.req === 0x7e0);
+  assert.match(engine.name, /Engine/);
+  assert.equal(engine.known, true);
+  // And is honest about the ones we don't.
+  const unknown = all.find((c) => c.req === 0x711);
+  assert.equal(unknown.known, false);
+  assert.match(unknown.name, /Unknown/);
 });
 
 check('write services are enumerated so nothing sends one by accident', () => {

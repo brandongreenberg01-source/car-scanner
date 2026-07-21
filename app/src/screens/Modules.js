@@ -28,23 +28,35 @@ export default function Modules() {
         reads its own fault memory.
       </Text>
 
-      <Pressable
-        style={[st.btn, sweep?.running && st.btnBusy]}
-        disabled={sweep?.running}
-        onPress={() => s.discoverModules()}
-      >
-        <Text style={st.btnText}>
-          {sweep?.running ? 'Scanning the bus…' : found.length ? 'Scan again' : 'Discover modules'}
-        </Text>
-      </Pressable>
-
-      {sweep?.running && (
-        <View style={st.progress}>
-          <ActivityIndicator color={T.accent} />
-          <Text style={st.progressText}>
-            {sweep.index + 1} / {sweep.total}  ·  {sweep.current}
+      {sweep?.running ? (
+        <>
+          <View style={st.progress}>
+            <ActivityIndicator color={T.accent} />
+            <Text style={st.progressText}>
+              {sweep.index + 1} / {sweep.total}  ·  {sweep.current}
+            </Text>
+          </View>
+          <Pressable style={[st.btn, st.btnStop]} onPress={() => s.stopSweep()}>
+            <Text style={[st.btnText, { color: T.dim }]}>Stop scan</Text>
+          </Pressable>
+        </>
+      ) : (
+        <>
+          <Pressable style={st.btn} onPress={() => s.discoverModules()}>
+            <Text style={st.btnText}>
+              {found.length ? 'Quick scan again' : 'Quick scan'}
+            </Text>
+          </Pressable>
+          <Pressable style={[st.btn, st.btnDeep]} onPress={() => s.discoverModules({ deep: true })}>
+            <Text style={[st.btnText, { color: T.accent }]}>Deep scan — every address</Text>
+          </Pressable>
+          <Text style={st.hint}>
+            Quick scan checks 20 likely addresses in seconds. Deep scan probes
+            the entire diagnostic block (240 addresses, a few minutes) and will
+            find modules sitting at addresses nobody has published for this
+            truck. Stoppable at any point.
           </Text>
-        </View>
+        </>
       )}
 
       {s.error ? <Text style={st.err}>{s.error}</Text> : null}
@@ -140,7 +152,10 @@ const st = StyleSheet.create({
     paddingVertical: 16, alignItems: 'center', marginBottom: 12,
   },
   btnBusy: { backgroundColor: T.panel, borderWidth: 1, borderColor: T.panelEdge },
+  btnDeep: { backgroundColor: 'transparent', borderWidth: 1, borderColor: T.accent },
+  btnStop: { backgroundColor: 'transparent', borderWidth: 1, borderColor: T.panelEdge },
   btnText: { color: '#04202B', fontSize: 17, fontWeight: '700' },
+  hint: { color: T.faint, fontSize: 12, lineHeight: 18, marginBottom: 16 },
 
   progress: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
   progressText: { color: T.dim, fontSize: 13, marginLeft: 10, fontFamily: F.mono },

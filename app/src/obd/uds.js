@@ -86,6 +86,34 @@ export const CANDIDATE_MODULES = [
 /** Ford/JLR convention: a module answers 8 above its request address. */
 export const responseIdFor = (reqId) => reqId + 8;
 
+/**
+ * Every 11-bit ID in the conventional diagnostic block, named where we have a
+ * guess and labelled honestly where we don't.
+ *
+ * This is the difference between checking 20 addresses someone else's cars use
+ * and actually mapping what is on THIS truck. A module sitting at an address
+ * absent from CANDIDATE_MODULES is invisible to the quick sweep and shows up
+ * here — which is the whole point when no public JLR address table exists.
+ *
+ * ponytail: 0x700-0x7FF only. Ceiling: 11-bit IDs outside that block, and
+ * 29-bit extended addressing, are not probed. Upgrade path is widening the
+ * range, at proportional time cost.
+ */
+export function fullSweepCandidates() {
+  const named = new Map(CANDIDATE_MODULES.map((m) => [m.req, m.name]));
+  const out = [];
+  for (let id = 0x700; id <= 0x7ff; id++) {
+    // 7E8-7EF are response addresses for 7E0-7E7, never request addresses.
+    if (id >= 0x7e8 && id <= 0x7ef) continue;
+    out.push({
+      req: id,
+      name: named.get(id) || `Unknown 0x${id.toString(16).toUpperCase()}`,
+      known: named.has(id),
+    });
+  }
+  return out;
+}
+
 const hex = (n, width = 2) => n.toString(16).toUpperCase().padStart(width, '0');
 
 /** Build the hex string for a UDS request, e.g. readDtcs() -> "1902FF". */

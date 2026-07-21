@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { Elm327 } from './obd/elm327.js';
 import * as ble from './ble.js';
 import { DEFAULT_LIVE_PIDS } from './obd/pids.js';
+import { CANDIDATE_MODULES, fullSweepCandidates } from './obd/uds.js';
 
 export const useStore = create((set, get) => ({
   // connection
@@ -127,7 +128,7 @@ export const useStore = create((set, get) => ({
   sweep: null,
   sweptOnce: false,
 
-  async discoverModules() {
+  async discoverModules({ deep = false } = {}) {
     const { elm } = get();
     if (!elm) return;
     // Live polling competes for the same command queue and makes the sweep
@@ -135,15 +136,30 @@ export const useStore = create((set, get) => ({
     const wasLive = get()._liveRunning;
     get().stopLive();
 
-    set({ sweep: { running: true, index: 0, total: 0, current: '' }, error: null });
+    const controller = new AbortController();
+    const candidates = deep ? fullSweepCandidates() : CANDIDATE_MODULES;
+    set({
+      sweep: { running: true, index: 0, total: candidates.length, current: '', deep },
+      _sweepAbort: controller,
+      error: null,
+    });
+
     try {
-      const found = await elm.discoverModules(undefined, ({ index, total, module }) =>
-        set({ sweep: { running: true, index, total, current: module.name } }));
-      set({ modules: found, sweep: null, sweptOnce: true });
+      const found = await elm.discoverModules(
+        candidates,
+        ({ index, total, module }) =>
+          set((s) => (s.sweep ? { sweep: { ...s.sweep, index, total, current: module.name } } : {})),
+        controller.signal,
+      );
+      set({ modules: found, sweep: null, _sweepAbort: null, sweptOnce: true });
     } catch (e) {
-      set({ error: e.message, sweep: null, sweptOnce: true });
+      set({ error: e.message, sweep: null, _sweepAbort: null, sweptOnce: true });
     }
     if (wasLive) get().startLive(get().supportedPids);
+  },
+
+  stopSweep() {
+    get()._sweepAbort?.abort();
   },
 
   async readModuleDtcs(reqId) {
