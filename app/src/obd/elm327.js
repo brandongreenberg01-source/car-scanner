@@ -419,6 +419,45 @@ export class Elm327 {
     return parseDtcsByStatusMask(bytes);
   }
 
+  /**
+   * Clear one module's fault memory — UDS service 0x14, group 0xFFFFFF (all).
+   *
+   * This is a normal scan-tool operation, not a risky write: it erases stored
+   * history, it does not reconfigure anything. Whether a code STAYS gone is
+   * entirely up to whether the fault is still present.
+   *
+   * Some modules refuse a clear in the default session, so on a refusal we
+   * escalate to the extended diagnostic session and try once more rather than
+   * reporting a dead end.
+   */
+  async clearModuleDtcs(reqId) {
+    await this.targetModule(reqId);
+
+    const attempt = () =>
+      this.udsRequest(SERVICE.CLEAR_DIAGNOSTIC_INFORMATION, [0xff, 0xff, 0xff], { timeoutMs: 6000 });
+
+    let { parsed } = await attempt();
+    if (parsed.kind === 'negative') {
+      // 0x7F/0x7E = wrong session, 0x22 = conditions not correct.
+      await this.udsRequest(SERVICE.DIAGNOSTIC_SESSION_CONTROL, [0x03], { timeoutMs: 4000 })
+        .catch(() => {});
+      ({ parsed } = await attempt());
+    }
+    return parsed;
+  }
+
+  /**
+   * Clear, then immediately re-read. This is the diagnostically useful move:
+   * whatever comes straight back is a live fault, and whatever stays gone was
+   * stale history. On a modified truck that is exactly the question — which of
+   * these codes is real and which is a leftover.
+   */
+  async clearAndVerify(reqId) {
+    const cleared = await this.clearModuleDtcs(reqId);
+    const after = await this.readModuleDtcs(reqId);
+    return { cleared, after };
+  }
+
   close() {
     if (this.unsubscribe) this.unsubscribe();
     if (this.pending) {

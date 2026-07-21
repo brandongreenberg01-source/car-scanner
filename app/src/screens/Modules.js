@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  View, Text, ScrollView, Pressable, ActivityIndicator, StyleSheet,
+  View, Text, ScrollView, Pressable, ActivityIndicator, Alert, StyleSheet,
 } from 'react-native';
 import { useStore } from '../store.js';
 import { T, F } from '../theme.js';
@@ -91,6 +91,21 @@ export default function Modules() {
 function ModuleCard({ module: m, store: s }) {
   const result = s.moduleDtcs?.[m.req];
   const busy = s.moduleBusy === m.req;
+  const cleared = s.moduleCleared?.[m.req];
+  const hasFaults = result?.kind === 'positive' && result.dtcs.length > 0;
+
+  const confirmClear = () =>
+    Alert.alert(
+      `Clear ${m.name} faults?`,
+      'This erases stored fault history in this module only.\n\n' +
+        'A fault that is still physically present will come straight back — often within seconds. ' +
+        'The app re-reads immediately afterwards so you can see which ones did.\n\n' +
+        'This does not reconfigure anything, and it will not stop a light returning if the cause is still there.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Clear', style: 'destructive', onPress: () => s.clearModule(m.req) },
+      ],
+    );
 
   return (
     <View style={st.card}>
@@ -111,6 +126,22 @@ function ModuleCard({ module: m, store: s }) {
             : <Text style={st.readBtnText}>Read faults</Text>}
         </Pressable>
       </View>
+
+      {hasFaults && !busy && (
+        <Pressable style={st.clearBtn} onPress={confirmClear}>
+          <Text style={st.clearBtnText}>Clear this module's faults</Text>
+        </Pressable>
+      )}
+
+      {cleared && (
+        <Text style={[st.clearResult, { color: cleared.ok ? (cleared.returned ? T.warn : T.ok) : T.warn }]}>
+          {!cleared.ok
+            ? `Module refused the clear: ${cleared.message}`
+            : cleared.returned === 0
+              ? 'Cleared — nothing came back. Those were stale.'
+              : `Cleared, but ${cleared.returned} code${cleared.returned === 1 ? '' : 's'} returned immediately. Those are live faults, not history.`}
+        </Text>
+      )}
 
       {result?.kind === 'negative' && (
         <Text style={st.refused}>
@@ -173,6 +204,13 @@ const st = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 9, minWidth: 96, alignItems: 'center',
   },
   readBtnText: { color: T.accent, fontSize: 13, fontWeight: '700' },
+
+  clearBtn: {
+    marginTop: 12, borderWidth: 1, borderColor: T.bad, borderRadius: 9,
+    paddingVertical: 11, alignItems: 'center',
+  },
+  clearBtnText: { color: T.bad, fontSize: 14, fontWeight: '700' },
+  clearResult: { fontSize: 13, lineHeight: 19, marginTop: 10, fontWeight: '600' },
 
   clean: { color: T.ok, fontSize: 14, marginTop: 12, fontWeight: '600' },
   refused: { color: T.warn, fontSize: 13, lineHeight: 19, marginTop: 12 },

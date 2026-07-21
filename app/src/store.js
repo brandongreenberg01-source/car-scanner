@@ -124,6 +124,7 @@ export const useStore = create((set, get) => ({
   // --- UDS module access ---------------------------------------------------
   modules: null,
   moduleDtcs: {},
+  moduleCleared: {},
   moduleBusy: null,
   sweep: null,
   sweptOnce: false,
@@ -160,6 +161,37 @@ export const useStore = create((set, get) => ({
 
   stopSweep() {
     get()._sweepAbort?.abort();
+  },
+
+  /**
+   * Clear one module and immediately re-read it, so the UI can say which codes
+   * actually came back rather than just claiming success.
+   */
+  async clearModule(reqId) {
+    const { elm } = get();
+    if (!elm) return;
+    set({ moduleBusy: reqId, error: null });
+    try {
+      const { cleared, after } = await elm.clearAndVerify(reqId);
+      if (cleared.kind === 'negative') {
+        set((s) => ({
+          moduleDtcs: { ...s.moduleDtcs, [reqId]: after },
+          moduleCleared: { ...s.moduleCleared, [reqId]: { ok: false, message: cleared.message } },
+          moduleBusy: null,
+        }));
+        return;
+      }
+      const returned = after.kind === 'positive' ? after.dtcs.length : 0;
+      set((s) => ({
+        moduleDtcs: { ...s.moduleDtcs, [reqId]: after },
+        moduleCleared: { ...s.moduleCleared, [reqId]: { ok: true, returned } },
+        moduleBusy: null,
+      }));
+    } catch (e) {
+      set({ error: e.message, moduleBusy: null });
+    } finally {
+      await elm.targetModule(null).catch(() => {});
+    }
   },
 
   async readModuleDtcs(reqId) {
