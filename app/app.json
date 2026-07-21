@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Scanner",
+    "slug": "car-scanner",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0B0D0E",
+    "ios": {
+      "bundleIdentifier": "com.squirrelbrain.carscanner",
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIUserInterfaceStyle": "Dark"
+      }
+    },
+    "android": {
+      "package": "com.squirrelbrain.carscanner"
+    },
+    "plugins": [
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": false,
+          "modes": ["central"],
+          "bluetoothAlwaysPermission": "Scanner uses Bluetooth to talk to your OBD-II adapter."
+        }
+      ]
+    ]
+  }
+}

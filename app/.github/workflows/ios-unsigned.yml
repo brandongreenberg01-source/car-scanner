@@ -1,0 +1,71 @@
+name: ios-unsigned
+# Builds an UNSIGNED iOS .ipa on a free GitHub macOS runner.
+# No Apple Developer account needed to compile — signing happens afterwards on
+# the Mac via Sideloadly with a free Apple ID. Same pipeline as GHOSTLIGHT.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Decoder self-check
+        # Fail before spending 30 minutes on a native build if the OBD parsing
+        # is broken.
+        run: node src/obd/obd.test.js
+
+      - name: Install JS deps
+        run: npm install
+
+      - name: Expo prebuild (native iOS project + pods)
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Build unsigned (.app)
+        run: |
+          set -o pipefail
+          cd ios
+          WS=$(ls -d *.xcworkspace | head -1)
+          SCHEME=$(basename "$WS" .xcworkspace)
+          echo "workspace=$WS scheme=$SCHEME"
+          xcodebuild \
+            -workspace "$WS" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" 2>&1 | tee xcodebuild.log
+
+      - name: Show errors if build failed
+        if: failure()
+        run: |
+          echo "===== error lines ====="
+          grep -aE "error:|BUILD FAILED|Command .* failed|The following build commands" ios/xcodebuild.log | grep -vaE "\-W|note:" | tail -40 || true
+
+      - name: Package unsigned .ipa
+        run: |
+          cd ios
+          APP=$(ls -d build/Build/Products/Release-iphoneos/*.app | head -1)
+          echo "app=$APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qr car-scanner-unsigned.ipa Payload
+          ls -lh car-scanner-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: car-scanner-unsigned-ipa
+          path: ios/car-scanner-unsigned.ipa
+          if-no-files-found: error

@@ -1,0 +1,4 @@
+{
+  "//": "Marks this folder as ESM so `node src/obd/obd.test.js` runs the decoders directly, with no build step and no test framework. Metro bundles these files by explicit filename and ignores this file.",
+  "type": "module"
+}

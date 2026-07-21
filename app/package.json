@@ -1,0 +1,24 @@
+{
+  "name": "car-scanner",
+  "version": "1.0.0",
+  "private": true,
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "ios": "expo run:ios",
+    "prebuild": "expo prebuild",
+    "test": "node src/obd/obd.test.js"
+  },
+  "dependencies": {
+    "buffer": "^6.0.3",
+    "expo": "~51.0.28",
+    "react": "18.2.0",
+    "react-native": "0.74.5",
+    "react-native-ble-plx": "^3.2.1",
+    "zustand": "^4.5.4"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "babel-preset-expo": "^11.0.0"
+  }
+}
