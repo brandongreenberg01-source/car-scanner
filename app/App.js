@@ -4,6 +4,7 @@ import {
 } from 'react-native';
 import Connect from './src/screens/Connect.js';
 import Codes from './src/screens/Codes.js';
+import Modules from './src/screens/Modules.js';
 import Live from './src/screens/Live.js';
 import { useStore } from './src/store.js';
 import { T } from './src/theme.js';
@@ -14,6 +15,7 @@ import { T } from './src/theme.js';
 const TABS = [
   { key: 'connect', label: 'Vehicle', screen: Connect },
   { key: 'codes', label: 'Codes', screen: Codes },
+  { key: 'modules', label: 'Modules', screen: Modules },
   { key: 'live', label: 'Live', screen: Live },
 ];
 

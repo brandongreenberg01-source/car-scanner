@@ -14,6 +14,10 @@ import {
 } from './elm327.js';
 import { decodeDtcBytes, describeDtc, isManufacturerSpecific } from './dtc.js';
 import { decodePid, decodeStatus } from './pids.js';
+import {
+  parseUdsResponse, buildRequest, responseIdFor, decodeUdsDtc,
+  decodeDtcStatus, parseDtcsByStatusMask, WRITE_SERVICES,
+} from './uds.js';
 
 let checks = 0;
 const running = [];
@@ -264,6 +268,132 @@ check('a timeout does not poison the next command', async () => {
       assert.ok(temp && Math.abs(temp.value - 181.4) < 0.01, 'next command must still work');
       elm.close();
     });
+});
+
+console.log('\nUDS (the protocol that reaches non-engine modules)');
+
+check('positive response is recognised and payload extracted', () => {
+  // 59 = 0x19 + 0x40
+  const r = parseUdsResponse([0x59, 0x02, 0xff, 0x01, 0x33, 0x11, 0x08], 0x19);
+  assert.equal(r.kind, 'positive');
+  assert.deepEqual(r.data, [0x02, 0xff, 0x01, 0x33, 0x11, 0x08]);
+});
+
+check('negative response decodes the reason', () => {
+  const r = parseUdsResponse([0x7f, 0x19, 0x11], 0x19);
+  assert.equal(r.kind, 'negative');
+  assert.equal(r.code, 0x11);
+  assert.match(r.message, /Service not supported/);
+});
+
+check('security-denied is distinguished from not-supported', () => {
+  // These lead to opposite conclusions about what is possible.
+  assert.match(parseUdsResponse([0x7f, 0x27, 0x33], 0x27).message, /Security access denied/);
+  assert.match(parseUdsResponse([0x7f, 0x27, 0x11], 0x27).message, /not supported/);
+});
+
+check('0x78 is pending, not a failure', () => {
+  const r = parseUdsResponse([0x7f, 0x19, 0x78], 0x19);
+  assert.equal(r.kind, 'pending');
+});
+
+check('a positive answer beats a preceding pending in the same buffer', () => {
+  // The regression that makes a live module look dead: most adapters absorb
+  // the 0x78 and hand back both frames concatenated.
+  const r = parseUdsResponse([0x7f, 0x19, 0x78, 0x59, 0x02, 0xff, 0x01, 0x33, 0x11, 0x08], 0x19);
+  assert.equal(r.kind, 'positive');
+  assert.deepEqual(r.data.slice(0, 2), [0x02, 0xff]);
+});
+
+check('silence is empty, not a crash', () => {
+  assert.equal(parseUdsResponse([], 0x19).kind, 'empty');
+  assert.equal(parseUdsResponse(null, 0x19).kind, 'empty');
+});
+
+check('request is built as hex', () => {
+  assert.equal(buildRequest(0x19, 0x02, 0xff), '1902FF');
+  assert.equal(buildRequest(0x3e, 0x00), '3E00');
+});
+
+check('response CAN ID is 8 above the request', () => {
+  assert.equal(responseIdFor(0x7e0), 0x7e8);
+  assert.equal(responseIdFor(0x760), 0x768);
+});
+
+check('UDS DTC decodes to the factory-tool format', () => {
+  // C1A20 with failure type 0x64 (plausibility), status confirmed.
+  const d = decodeUdsDtc(0x5a, 0x20, 0x64, 0x08);
+  assert.equal(d.code, 'C1A20');
+  assert.equal(d.fullCode, 'C1A20-64');
+  assert.match(d.failureDescription, /plausibility/);
+  assert.equal(d.status.confirmed, true);
+  assert.equal(d.active, true);
+});
+
+check('failure type is what separates two faults on the same circuit', () => {
+  const short = decodeUdsDtc(0x01, 0x33, 0x11, 0x08);
+  const open = decodeUdsDtc(0x01, 0x33, 0x13, 0x08);
+  assert.equal(short.code, open.code, 'same base code');
+  assert.notEqual(short.fullCode, open.fullCode, 'but must not be conflated');
+  assert.match(short.failureDescription, /shorted to ground/);
+  assert.match(open.failureDescription, /open/);
+});
+
+check('all-zero DTC padding is ignored', () => {
+  assert.equal(decodeUdsDtc(0x00, 0x00, 0x00, 0x00), null);
+});
+
+check('status bits decode independently', () => {
+  const s = decodeDtcStatus(0x2f);
+  assert.equal(s.testFailed, true);
+  assert.equal(s.confirmed, true);
+  assert.equal(s.testFailedSinceClear, true);
+  assert.equal(s.warningIndicatorRequested, false);
+  // A historic-only fault must not read as currently failing.
+  const hist = decodeDtcStatus(0x08);
+  assert.equal(hist.testFailed, false);
+  assert.equal(hist.confirmed, true);
+});
+
+check('full 0x19 response parses into multiple DTCs', () => {
+  // 59 02 FF, then two 4-byte records.
+  const r = parseDtcsByStatusMask([
+    0x59, 0x02, 0xff,
+    0x01, 0x33, 0x11, 0x08,
+    0x5a, 0x20, 0x64, 0x2f,
+  ]);
+  assert.equal(r.kind, 'positive');
+  assert.equal(r.dtcs.length, 2);
+  assert.equal(r.dtcs[0].fullCode, 'P0133-11');
+  assert.equal(r.dtcs[1].fullCode, 'C1A20-64');
+});
+
+check('module with no faults returns an empty list, not an error', () => {
+  const r = parseDtcsByStatusMask([0x59, 0x02, 0xff]);
+  assert.equal(r.kind, 'positive');
+  assert.deepEqual(r.dtcs, []);
+});
+
+check('a refusing module surfaces the refusal rather than empty results', () => {
+  const r = parseDtcsByStatusMask([0x7f, 0x19, 0x31]);
+  assert.equal(r.kind, 'negative');
+  assert.match(r.message, /out of range/);
+});
+
+check('duplicate DTC records are collapsed', () => {
+  const r = parseDtcsByStatusMask([
+    0x59, 0x02, 0xff,
+    0x01, 0x33, 0x11, 0x08,
+    0x01, 0x33, 0x11, 0x08,
+  ]);
+  assert.equal(r.dtcs.length, 1);
+});
+
+check('write services are enumerated so nothing sends one by accident', () => {
+  assert.equal(WRITE_SERVICES.has(0x2e), true, 'WriteDataByIdentifier');
+  assert.equal(WRITE_SERVICES.has(0x34), true, 'RequestDownload');
+  assert.equal(WRITE_SERVICES.has(0x19), false, 'ReadDTC is not a write');
+  assert.equal(WRITE_SERVICES.has(0x22), false, 'ReadDataByIdentifier is not a write');
 });
 
 await Promise.all(running);

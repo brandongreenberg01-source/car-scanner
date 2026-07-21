@@ -120,6 +120,48 @@ export const useStore = create((set, get) => ({
     }
   },
 
+  // --- UDS module access ---------------------------------------------------
+  modules: null,
+  moduleDtcs: {},
+  moduleBusy: null,
+  sweep: null,
+  sweptOnce: false,
+
+  async discoverModules() {
+    const { elm } = get();
+    if (!elm) return;
+    // Live polling competes for the same command queue and makes the sweep
+    // crawl; the bus is also quieter without it.
+    const wasLive = get()._liveRunning;
+    get().stopLive();
+
+    set({ sweep: { running: true, index: 0, total: 0, current: '' }, error: null });
+    try {
+      const found = await elm.discoverModules(undefined, ({ index, total, module }) =>
+        set({ sweep: { running: true, index, total, current: module.name } }));
+      set({ modules: found, sweep: null, sweptOnce: true });
+    } catch (e) {
+      set({ error: e.message, sweep: null, sweptOnce: true });
+    }
+    if (wasLive) get().startLive(get().supportedPids);
+  },
+
+  async readModuleDtcs(reqId) {
+    const { elm } = get();
+    if (!elm) return;
+    set({ moduleBusy: reqId, error: null });
+    try {
+      const result = await elm.readModuleDtcs(reqId);
+      set((s) => ({ moduleDtcs: { ...s.moduleDtcs, [reqId]: result }, moduleBusy: null }));
+    } catch (e) {
+      set({ error: e.message, moduleBusy: null });
+    } finally {
+      // Always hand the adapter back to broadcast mode, or every later
+      // generic OBD request silently goes to the module we last targeted.
+      await elm.targetModule(null).catch(() => {});
+    }
+  },
+
   /**
    * Poll live PIDs round-robin until stopped. One command in flight at a time
    * is enforced by Elm327 anyway; this just keeps the queue fed.

@@ -10,6 +10,10 @@
 
 import { decodeDtcBytes, explainDtc } from './dtc.js';
 import { decodePid, decodeStatus, PIDS } from './pids.js';
+import {
+  SERVICE, buildRequest, parseUdsResponse, parseDtcsByStatusMask,
+  responseIdFor, CANDIDATE_MODULES,
+} from './uds.js';
 
 const PROMPT = '>';
 
@@ -295,6 +299,102 @@ export class Elm327 {
       if (!(mask[3] & 0x01)) break;
     }
     return [...supported].filter((p) => PIDS[p]);
+  }
+
+  // --- UDS: talking to modules that aren't the engine ----------------------
+  //
+  // Generic OBD-II broadcasts to 0x7DF and whoever answers, answers. To reach
+  // the ABS module you have to address it directly, which means three things
+  // the adapter does not do by default:
+  //   ATSH   set the transmit header to the module's request ID
+  //   ATCRA  filter receive to that module's response ID, so other chatter on
+  //          a live bus doesn't get spliced into the reply
+  //   ATFC*  supply ISO-TP flow control, because with a custom header the
+  //          adapter no longer auto-generates it and multi-frame replies
+  //          (which is most DTC lists) simply stall without it
+
+  /** Point the adapter at one module. Pass null to go back to broadcast. */
+  async targetModule(reqId) {
+    if (reqId === null) {
+      await this.send('ATAR');       // restore automatic receive address
+      await this.send('ATSH7DF');    // OBD-II functional broadcast
+      await this.send('ATFCSM0');    // adapter handles flow control again
+      this.target = null;
+      return;
+    }
+    const req = reqId.toString(16).toUpperCase().padStart(3, '0');
+    const res = responseIdFor(reqId).toString(16).toUpperCase().padStart(3, '0');
+
+    await this.send('ATSH' + req);
+    await this.send('ATCRA' + res);
+    await this.send('ATFCSH' + req);
+    await this.send('ATFCSD300000');  // block size 0, no separation time
+    await this.send('ATFCSM1');       // use the flow control we just defined
+    this.target = reqId;
+  }
+
+  /**
+   * Send a UDS request to the currently targeted module.
+   * Transparently waits out 0x78 "response pending", which modules use when a
+   * request takes longer than the protocol timeout — treating it as a failure
+   * is the classic reason a scan tool "can't see" a module that is right there.
+   */
+  async udsRequest(service, params = [], { timeoutMs = 4000, maxPending = 4 } = {}) {
+    const request = buildRequest(service, ...params);
+    let bytes = await this.sendBytes(request, timeoutMs);
+    let parsed = parseUdsResponse(bytes, service);
+
+    // Most adapters absorb 0x78 themselves; this covers the ones that don't.
+    for (let i = 0; parsed.kind === 'pending' && i < maxPending; i++) {
+      bytes = await this.sendBytes(request, timeoutMs);
+      parsed = parseUdsResponse(bytes, service);
+    }
+    return { parsed, bytes };
+  }
+
+  /**
+   * Probe one CAN ID to see whether a module lives there.
+   * TesterPresent is the right knock: every UDS module implements it, it
+   * changes nothing, and even a *negative* reply proves something is home.
+   */
+  async probeModule(reqId, timeoutMs = 1200) {
+    await this.targetModule(reqId);
+    try {
+      const { parsed } = await this.udsRequest(SERVICE.TESTER_PRESENT, [0x00], {
+        timeoutMs, maxPending: 1,
+      });
+      // Anything other than silence means a module answered.
+      return parsed.kind === 'positive' || parsed.kind === 'negative';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Sweep candidate addresses and report which ones are actually populated.
+   * This is the discovery step that replaces guessing at a module table.
+   */
+  async discoverModules(candidates = CANDIDATE_MODULES, onProgress) {
+    const found = [];
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i];
+      const present = await this.probeModule(c.req);
+      onProgress?.({ index: i, total: candidates.length, module: c, present });
+      if (present) found.push(c);
+    }
+    await this.targetModule(null);
+    return found;
+  }
+
+  /**
+   * Read stored DTCs from one module via UDS service 0x19.
+   * Mask 0xFF asks for everything the module has rather than only confirmed
+   * faults — on a 15-year-old truck the pending and historic ones matter too.
+   */
+  async readModuleDtcs(reqId, statusMask = 0xff) {
+    await this.targetModule(reqId);
+    const { bytes } = await this.udsRequest(SERVICE.READ_DTC_INFORMATION, [0x02, statusMask]);
+    return parseDtcsByStatusMask(bytes);
   }
 
   close() {
