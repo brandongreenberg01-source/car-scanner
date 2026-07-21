@@ -11,6 +11,11 @@ jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 45
+    defaults:
+      run:
+        # The Expo project lives in app/; this workflow must sit at the repo
+        # root or GitHub never picks it up.
+        working-directory: app
     steps:
       - uses: actions/checkout@v4
 
@@ -67,5 +72,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: car-scanner-unsigned-ipa
-          path: ios/car-scanner-unsigned.ipa
+          # upload-artifact does not honour `defaults.run.working-directory`.
+          path: app/ios/car-scanner-unsigned.ipa
           if-no-files-found: error
